@@ -8,6 +8,10 @@
 #pragma comment(lib, "minhook/libMinHook.x86.lib")
 #endif //_WIN64
 
+typedef HGDIOBJ (WINAPI *p_SelectObject)(
+    HDC hdc, 
+    HGDIOBJ h);
+
 typedef BOOL(WINAPI *p_GetCharABCWidthsI)(
     HDC hdc,
     UINT giFirst,
@@ -15,16 +19,45 @@ typedef BOOL(WINAPI *p_GetCharABCWidthsI)(
     LPWORD pgi,
     LPABC pabc);
 
+static p_SelectObject original_SelectObject = nullptr;
+static p_GetCharABCWidthsI original_GetCharABCWidthsI = nullptr;
+
 struct FontData
 {
-    unsigned int count = 1;
+    unsigned int count = 0;
     unsigned int hits = 0;
     unsigned int misses = 0;
     std::unordered_map<UINT, ABC> cache;
 };
 
-static p_GetCharABCWidthsI original_GetCharABCWidthsI = nullptr;
+static HGDIOBJ curHdc = nullptr;
+static FontData* curFont = nullptr;
 static std::unordered_map<HGDIOBJ, FontData> fontData;
+
+static bool checkThread()
+{
+    static DWORD tid = GetCurrentThreadId();
+    return tid == GetCurrentThreadId();
+}
+
+static HGDIOBJ WINAPI hook_SelectObject(
+    HDC hdc,
+    HGDIOBJ h)
+{
+    auto result = original_SelectObject(hdc, h);
+    auto found = fontData.find(h);
+    if(checkThread() && found != fontData.end())
+    {
+        curHdc = hdc;
+        curFont = &found->second;
+    }
+    else
+    {
+        curHdc = nullptr;
+        curFont = nullptr;
+    }
+    return result;
+}
 
 static BOOL WINAPI hook_GetCharABCWidthsI(
     __in HDC hdc,
@@ -34,31 +67,33 @@ static BOOL WINAPI hook_GetCharABCWidthsI(
     __out_ecount(cgi) LPABC pabc)
 {
     //Don't cache if called from a different thread
-    static DWORD tid = GetCurrentThreadId();
-    if(tid != GetCurrentThreadId())
+    if(!checkThread())
         return original_GetCharABCWidthsI(hdc, giFirst, cgi, pgi, pabc);
 
     //Get the current font object and get a (new) pointer to the cache
-    auto font = GetCurrentObject(hdc, OBJ_FONT);
-    auto foundData = fontData.find(font);
-    if(foundData == fontData.end())
-        foundData = fontData.insert({ font, FontData() }).first;
-    else
-        foundData->second.count++;
+    if(!curFont || curHdc != hdc)
+    {
+        auto hFont = GetCurrentObject(hdc, OBJ_FONT);
+        auto found = fontData.find(hFont);
+        if(found == fontData.end())
+            found = fontData.insert({ hFont, FontData() }).first;
+        curFont = &found->second;
+    }
+    curFont->count++;
 
     //Functions to lookup/store glyph index data with the cache
     bool allCached = true;
     auto lookupGlyphIndex = [&](UINT index, ABC & result)
     {
-        auto found = foundData->second.cache.find(index);
-        if(found == foundData->second.cache.end())
+        auto found = curFont->cache.find(index);
+        if(found == curFont->cache.end())
             return allCached = false;
         result = found->second;
         return true;
     };
     auto storeGlyphIndex = [&](UINT index, ABC & result)
     {
-        foundData->second.cache[index] = result;
+        curFont->cache[index] = result;
     };
 
     //A pointer to an array that contains glyph indices.
@@ -80,11 +115,11 @@ static BOOL WINAPI hook_GetCharABCWidthsI(
     //If everything was cached we don't have to call the original
     if(allCached)
     {
-        foundData->second.hits++;
+        curFont->hits++;
         return TRUE;
     }
 
-    foundData->second.misses++;
+    curFont->misses++;
 
     //Call original function
     auto result = original_GetCharABCWidthsI(hdc, giFirst, cgi, pgi, pabc);
@@ -126,6 +161,8 @@ bool pluginInit(PLUG_INITSTRUCT* initStruct)
     if(!_plugin_registercommand(pluginHandle, "abcdata", cbCharABCCounter, false))
         return false;
     if(MH_Initialize() != MH_OK)
+        return false;
+    if(MH_CreateHook(&SelectObject, &hook_SelectObject, (LPVOID*)&original_SelectObject) != MH_OK)
         return false;
     if(MH_CreateHook(&GetCharABCWidthsI, &hook_GetCharABCWidthsI, (LPVOID*)&original_GetCharABCWidthsI) != MH_OK)
         return false;
