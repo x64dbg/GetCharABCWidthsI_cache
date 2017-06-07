@@ -33,10 +33,10 @@ struct FontData
 static HGDIOBJ curHdc = nullptr;
 static FontData* curFont = nullptr;
 static std::unordered_map<HGDIOBJ, FontData> fontData;
+static DWORD tid = 0;
 
 static bool checkThread()
 {
-    static DWORD tid = GetCurrentThreadId();
     return tid == GetCurrentThreadId();
 }
 
@@ -45,17 +45,18 @@ static HGDIOBJ WINAPI hook_SelectObject(
     HGDIOBJ h)
 {
     auto result = original_SelectObject(hdc, h);
-    auto found = fontData.find(h);
-    if(checkThread() && found != fontData.end())
+    if(checkThread())
     {
-        curHdc = hdc;
-        curFont = &found->second;
+        auto found = fontData.find(h);
+        if(found != fontData.end())
+        {
+            curHdc = hdc;
+            curFont = &found->second;
+        }
+        return result;
     }
-    else
-    {
-        curHdc = nullptr;
-        curFont = nullptr;
-    }
+    curHdc = nullptr;
+    curFont = nullptr;
     return result;
 }
 
@@ -66,6 +67,10 @@ static BOOL WINAPI hook_GetCharABCWidthsI(
     __in_ecount_opt(cgi) LPWORD pgi,
     __out_ecount(cgi) LPABC pabc)
 {
+    //Initialize the thread ID.
+    if(tid == 0)
+        tid = GetCurrentThreadId();
+
     //Don't cache if called from a different thread
     if(!checkThread())
         return original_GetCharABCWidthsI(hdc, giFirst, cgi, pgi, pabc);
