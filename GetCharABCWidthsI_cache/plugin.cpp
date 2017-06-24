@@ -45,18 +45,15 @@ static HGDIOBJ WINAPI hook_SelectObject(
     HGDIOBJ h)
 {
     auto result = original_SelectObject(hdc, h);
-    if(checkThread())
-    {
-        auto found = fontData.find(h);
-        if(found != fontData.end())
-        {
-            curHdc = hdc;
-            curFont = &found->second;
-        }
+    if(!checkThread())
         return result;
+
+    auto found = fontData.find(h);
+    if(found != fontData.end())
+    {
+        curHdc = hdc;
+        curFont = &found->second;
     }
-    curHdc = nullptr;
-    curFont = nullptr;
     return result;
 }
 
