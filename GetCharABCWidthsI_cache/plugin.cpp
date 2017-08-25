@@ -39,14 +39,14 @@ static HGDIOBJ WINAPI hook_SelectObject(
     HGDIOBJ h)
 {
     auto result = original_SelectObject(hdc, h);
-    if(!checkThread())
-        return result;
-
-    auto found = fontData.find(h);
-    if(found != fontData.end())
+    if(checkThread())
     {
-        curHdc = hdc;
-        curFont = &found->second;
+        auto found = fontData.find(h);
+        if(found != fontData.end())
+        {
+            curHdc = hdc;
+            curFont = &found->second;
+        }
     }
     return result;
 }
@@ -77,19 +77,22 @@ static BOOL WINAPI hook_GetCharABCWidthsI(
     }
     curFont->count++;
 
+    //Copy the current FontData pointer (https://github.com/x64dbg/GetCharABCWidthsI_cache/issues/1)
+    auto font = curFont;
+
     //Functions to lookup/store glyph index data with the cache
     bool allCached = true;
-    auto lookupGlyphIndex = [&](UINT index, ABC & result)
+    auto lookupGlyphIndex = [&allCached, font](UINT index, ABC & result)
     {
-        auto found = curFont->cache.find(index);
-        if(found == curFont->cache.end())
+        auto found = font->cache.find(index);
+        if(found == font->cache.end())
             return allCached = false;
         result = found->second;
         return true;
     };
-    auto storeGlyphIndex = [&](UINT index, ABC & result)
+    auto storeGlyphIndex = [font](UINT index, ABC & result)
     {
-        curFont->cache[index] = result;
+        font->cache[index] = result;
     };
 
     //A pointer to an array that contains glyph indices.
@@ -111,11 +114,11 @@ static BOOL WINAPI hook_GetCharABCWidthsI(
     //If everything was cached we don't have to call the original
     if(allCached)
     {
-        curFont->hits++;
+        font->hits++;
         return TRUE;
     }
 
-    curFont->misses++;
+    font->misses++;
 
     //Call original function
     auto result = original_GetCharABCWidthsI(hdc, giFirst, cgi, pgi, pabc);
