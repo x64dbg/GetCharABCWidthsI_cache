@@ -2,12 +2,6 @@
 #include "minhook/MinHook.h"
 #include <unordered_map>
 
-#ifdef _WIN64
-#pragma comment(lib, "minhook/libMinHook.x64.lib")
-#else
-#pragma comment(lib, "minhook/libMinHook.x86.lib")
-#endif //_WIN64
-
 typedef HGDIOBJ (WINAPI *p_SelectObject)(
     HDC hdc, 
     HGDIOBJ h);
