@@ -13,8 +13,16 @@ typedef BOOL(WINAPI *p_GetCharABCWidthsI)(
     LPWORD pgi,
     LPABC pabc);
 
+typedef BOOL(WINAPI *p_SystemParametersInfoW)(
+	UINT  uiAction,
+	UINT  uiParam,
+	PVOID pvParam,
+	UINT  fWinIni
+	);
+
 static p_SelectObject original_SelectObject = nullptr;
 static p_GetCharABCWidthsI original_GetCharABCWidthsI = nullptr;
+static p_SystemParametersInfoW original_SystemParametersInfoW = nullptr;
 
 struct FontData
 {
@@ -142,6 +150,40 @@ static BOOL WINAPI hook_GetCharABCWidthsI(
     return TRUE;
 }
 
+BOOL WINAPI hook_SystemParametersInfoW(
+	_In_    UINT  uiAction,
+	_In_    UINT  uiParam,
+	_Inout_ PVOID pvParam,
+	_In_    UINT  fWinIni
+)
+{
+	switch (uiAction)
+	{
+	case SPI_GETCLIENTAREAANIMATION:
+		break;
+	case SPI_GETKEYBOARDCUES:
+		break;
+	case SPI_SETFONTSMOOTHINGCONTRAST:
+		break;
+	case SPI_GETNONCLIENTMETRICS: //perf issues
+	{
+		static NONCLIENTMETRICSW cache = { 0 };
+		if (cache.cbSize == 0)
+		{
+			auto retVal = original_SystemParametersInfoW(uiAction, uiParam, pvParam, fWinIni);
+			if (retVal)
+				memcpy(&cache, pvParam, uiParam);
+		}
+		else 
+		{
+			memcpy(pvParam, &cache, uiParam);
+			return TRUE;
+		}
+	}	
+	}
+	return original_SystemParametersInfoW(uiAction, uiParam, pvParam, fWinIni);
+}
+
 static bool cbCharABCCounter(int argc, char* argv[])
 {
     _plugin_logprintf("font count: %d\n", int(fontData.size()));
@@ -165,6 +207,8 @@ bool pluginInit(PLUG_INITSTRUCT* initStruct)
         return false;
     if(MH_CreateHook(&GetCharABCWidthsI, &hook_GetCharABCWidthsI, (LPVOID*)&original_GetCharABCWidthsI) != MH_OK)
         return false;
+	if (MH_CreateHook(&SystemParametersInfoW, &hook_SystemParametersInfoW, (LPVOID*)&original_SystemParametersInfoW) != MH_OK)
+		return false;
     if(MH_EnableHook(MH_ALL_HOOKS) != MH_OK)
         return false;
     return true;
